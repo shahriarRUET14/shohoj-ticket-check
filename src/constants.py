@@ -18,6 +18,12 @@ ENV_OVERRIDE_DATE = "OVERRIDE_DATE"
 ENV_DISCORD_TEST_MESSAGE = "DISCORD_TEST_MESSAGE"
 # Optional: send an embed the first time each route/date key is seen (default is change-only).
 ENV_NOTIFY_ON_BASELINE = "NOTIFY_ON_BASELINE"
+# Discord notification mode (boolean string: 1/true/yes/on vs 0/false/no/off):
+# - DISCORD_NOTIFY_EVERY_CHECK=true  → embed on every successful run (current trip counts).
+# - DISCORD_NOTIFY_EVERY_CHECK=false → only when a trip count changes vs saved state (legacy).
+ENV_DISCORD_NOTIFY_EVERY_CHECK = "DISCORD_NOTIFY_EVERY_CHECK"
+# Legacy alias for ENV_DISCORD_NOTIFY_EVERY_CHECK (same true/false rules); ignored if the primary is set.
+ENV_DISCORD_REPORT_EVERY_RUN = "DISCORD_REPORT_EVERY_RUN"
 
 # Default relative path for persisted counts (repo root is cwd in Actions and typical local runs).
 DEFAULT_STATE_PATH = "storage/state.json"

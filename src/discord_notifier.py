@@ -38,6 +38,83 @@ class TripCountChange:
     current_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class RouteRunSnapshot:
+    """One route’s trip count after a Shohoz fetch (used for per-run Discord summaries)."""
+
+    from_city: str
+    to_city: str
+    journey_date: str
+    current_count: int
+    previous_count: int | None
+
+
+def send_run_summary_notification(snapshots: list[RouteRunSnapshot]) -> None:
+    """
+    Post a single Discord embed listing **current** trip counts for every route in this run.
+
+    Raises:
+        RuntimeError: if ``DISCORD_WEBHOOK`` is missing or Discord rejects the payload.
+    """
+
+    if not snapshots:
+        return
+
+    webhook_url = require_discord_webhook_url()
+    session = create_requests_session(total_retries=3, backoff_factor=0.75)
+
+    checked_at = datetime.now(timezone.utc)
+    checked_at_str = checked_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    embed_timestamp = checked_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    any_changed = any(
+        s.previous_count is not None and s.previous_count != s.current_count for s in snapshots
+    )
+    any_new = any(s.previous_count is None for s in snapshots)
+
+    title = "🚌 Shohoz trip check"
+    if any_changed:
+        title += " · count changed"
+    elif any_new:
+        title += " · new baseline"
+
+    color = 0xF39C12 if any_changed else (0x3498DB if any_new else 0x2ECC71)
+
+    fields: list[dict[str, Any]] = []
+    for s in snapshots:
+        if s.previous_count is None:
+            detail = f"**{s.current_count}** trips available\n_First observation for this journey date (baseline)._"
+        elif s.previous_count != s.current_count:
+            delta = s.current_count - s.previous_count
+            detail = (
+                f"**{s.current_count}** trips available\n"
+                f"Was **{s.previous_count}** last run → **Δ {delta:+d}**"
+            )
+        else:
+            detail = f"**{s.current_count}** trips available\nUnchanged vs last run (**{s.previous_count}**)."
+
+        fields.append(
+            {
+                "name": f"{s.from_city} → {s.to_city}",
+                "value": detail,
+                "inline": False,
+            }
+        )
+
+    journey = snapshots[0].journey_date
+    embed: dict[str, Any] = {
+        "title": title,
+        "description": f"Journey date **{journey}** · checked **{checked_at_str}**",
+        "color": color,
+        "timestamp": embed_timestamp,
+        "fields": fields[:25],
+        "footer": {"text": "Shohoz bus monitor · periodic summary"},
+    }
+
+    payload = {"embeds": [embed]}
+    _post_json(session, webhook_url, payload)
+
+
 def require_discord_webhook_url() -> str:
     """Read ``DISCORD_WEBHOOK`` from the environment or raise a clear error."""
 

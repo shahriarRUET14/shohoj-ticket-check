@@ -32,12 +32,14 @@ from src.constants import (  # noqa: E402
 from src.date_utils import journey_date_from_env_or_today  # noqa: E402
 from src.discord_notifier import (  # noqa: E402
     BaselineObservation,
+    RouteRunSnapshot,
     TripCountChange,
     send_baseline_notifications,
+    send_run_summary_notification,
     send_test_webhook,
     send_trip_change_notifications,
 )
-from src.env_utils import truthy  # noqa: E402
+from src.env_utils import discord_notify_every_check, truthy  # noqa: E402
 from src.http_client import create_requests_session  # noqa: E402
 from src.shohoz_client import ShohozApiError, fetch_trip_count  # noqa: E402
 from src.storage import (  # noqa: E402
@@ -96,6 +98,11 @@ def run() -> int:
         _LOG.error("Invalid journey date configuration: %s", exc)
         return 1
 
+    _LOG.info(
+        "Discord mode: %s",
+        "every check (summary embed)" if discord_notify_every_check() else "only on trip-count change",
+    )
+
     try:
         routes = load_routes_config(config_path)
     except (OSError, ValueError) as exc:
@@ -107,6 +114,7 @@ def run() -> int:
 
     change_events: list[TripCountChange] = []
     pending_baselines: list[BaselineObservation] = []
+    snapshots: list[RouteRunSnapshot] = []
     state_dirty = False
     failures = 0
 
@@ -125,6 +133,16 @@ def run() -> int:
             continue
 
         previous = read_route_state(state, key)
+        snapshots.append(
+            RouteRunSnapshot(
+                from_city=route.from_city,
+                to_city=route.to_city,
+                journey_date=journey_date,
+                current_count=current,
+                previous_count=previous,
+            )
+        )
+
         if previous is None:
             _LOG.info(
                 "New route/date key (no saved baseline yet): %s | current trips=%s",
@@ -139,24 +157,21 @@ def run() -> int:
                     trip_count=current,
                 )
             )
-            continue
-
-        if previous == current:
-            _LOG.info("No trip-count change for %s (trips=%s). Skipping Discord.", key, current)
-            continue
-
-        _LOG.warning("Trip-count change detected for %s: %s -> %s", key, previous, current)
-        change_events.append(
-            TripCountChange(
-                from_city=route.from_city,
-                to_city=route.to_city,
-                journey_date=journey_date,
-                previous_count=previous,
-                current_count=current,
+        elif previous == current:
+            _LOG.info("Stable trip count for %s (trips=%s).", key, current)
+        else:
+            _LOG.warning("Trip-count change detected for %s: %s -> %s", key, previous, current)
+            change_events.append(
+                TripCountChange(
+                    from_city=route.from_city,
+                    to_city=route.to_city,
+                    journey_date=journey_date,
+                    previous_count=previous,
+                    current_count=current,
+                )
             )
-        )
 
-    if change_events:
+    if change_events and not discord_notify_every_check():
         try:
             send_trip_change_notifications(change_events)
         except RuntimeError as exc:
@@ -178,19 +193,40 @@ def run() -> int:
             )
         state_dirty = True
 
-    if pending_baselines:
-        if truthy(ENV_NOTIFY_ON_BASELINE):
-            try:
-                send_baseline_notifications(pending_baselines)
-            except RuntimeError as exc:
-                _LOG.error("Discord baseline notification failed: %s", exc)
-        else:
-            _LOG.info(
-                "Recorded %s baseline(s) locally without Discord "
-                "(set NOTIFY_ON_BASELINE=1 for a first-run message, or DISCORD_TEST_MESSAGE=1 to test the webhook).",
-                len(pending_baselines),
-            )
+    if pending_baselines and truthy(ENV_NOTIFY_ON_BASELINE):
+        try:
+            send_baseline_notifications(pending_baselines)
+        except RuntimeError as exc:
+            _LOG.error("Discord baseline notification failed: %s", exc)
 
+    if discord_notify_every_check() and snapshots:
+        try:
+            send_run_summary_notification(snapshots)
+        except RuntimeError as exc:
+            _LOG.error("Discord run summary failed: %s", exc)
+            return 1
+    elif discord_notify_every_check() and not snapshots:
+        _LOG.warning(
+            "DISCORD_NOTIFY_EVERY_CHECK is on but no routes were fetched successfully; skipping Discord."
+        )
+
+    if change_events and discord_notify_every_check():
+        for change in change_events:
+            upsert_route_state(
+                state,
+                key=state_key(
+                    from_city=change.from_city,
+                    to_city=change.to_city,
+                    journey_date=change.journey_date,
+                ),
+                from_city=change.from_city,
+                to_city=change.to_city,
+                journey_date=change.journey_date,
+                trip_count=change.current_count,
+            )
+        state_dirty = True
+
+    if pending_baselines:
         for obs in pending_baselines:
             baseline_key = state_key(
                 from_city=obs.from_city,
@@ -218,20 +254,17 @@ def run() -> int:
         _LOG.error("Completed with %s route failure(s).", failures)
         return 1
 
-    if change_events:
+    if discord_notify_every_check() and snapshots:
+        _LOG.info("Summary: Discord run summary sent (%s route(s)).", len(snapshots))
+    elif change_events and not discord_notify_every_check():
         _LOG.info("Summary: Discord trip-change message(s) sent for %s route(s).", len(change_events))
+    elif pending_baselines and truthy(ENV_NOTIFY_ON_BASELINE):
+        _LOG.info("Summary: Discord baseline message sent for %s route(s).", len(pending_baselines))
     elif pending_baselines:
-        if truthy(ENV_NOTIFY_ON_BASELINE):
-            _LOG.info("Summary: Discord baseline message sent for %s route(s).", len(pending_baselines))
-        else:
-            _LOG.info(
-                "Summary: %s baseline(s) saved; Discord skipped (alerts are change-only by default).",
-                len(pending_baselines),
-            )
+        _LOG.info("Summary: %s baseline(s) saved to state.", len(pending_baselines))
     else:
         _LOG.info(
-            "Summary: no baseline or trip-count changes — Discord not used this run. "
-            "Counts matched `storage/state.json` for every route on %s.",
+            "Summary: all monitored routes stable on %s (legacy mode would skip Discord).",
             journey_date,
         )
 

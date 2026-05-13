@@ -101,10 +101,12 @@ Notes:
 
 | Variable | Required | Purpose |
 |---|---:|---|
-| `DISCORD_WEBHOOK` | Yes (when changes occur) | Discord incoming webhook URL |
+| `DISCORD_WEBHOOK` | Yes (for Discord) | Incoming webhook URL; required in CI when summaries are enabled |
 | `OVERRIDE_DATE` | No | Forces journey date for all routes, format **`DD-MMM-YYYY`** (example: `30-May-2026`) |
 | `DISCORD_TEST_MESSAGE` | No | Set to `1` / `true` / `yes` to send a **one-shot** test message and exit (then remove it) |
-| `NOTIFY_ON_BASELINE` | No | Set to `1` / `true` / `yes` to also notify the **first** time each route+date is stored |
+| `NOTIFY_ON_BASELINE` | No | Set to `1` / `true` / `yes` to also notify the **first** time each route+date is stored (usually leave **off** if you use per-run summaries) |
+| `DISCORD_NOTIFY_EVERY_CHECK` | No | **`true`** / **`1`** (default when unset): Discord **summary on every successful run** with current trip counts. **`false`** / **`0`**: Discord **only when a trip count changes** (and optional baseline if enabled). |
+| `DISCORD_REPORT_EVERY_RUN` | No | **Legacy alias** for `DISCORD_NOTIFY_EVERY_CHECK`; used only if `DISCORD_NOTIFY_EVERY_CHECK` is unset or empty. |
 
 ## Shohoz API (reference)
 
@@ -160,9 +162,10 @@ Optional **variable** (not secret): **Settings → Secrets and variables → Act
 
 ### 5) Confirm the workflow and schedule
 
-- **Cron** is `0 * * * *`: at **minute 0** of every clock hour in **UTC** (so “1:00, 2:00, 3:00” in the **UTC** sense: `01:00`, `02:00`, `03:00` UTC).
-- To run in **your** local timezone at those wall-clock times, either accept UTC scheduling or add a separate workflow/cron offset (advanced). Most users standardize on **UTC** and compare with [timeanddate.com](https://www.timeanddate.com/worldclock/) for Bangladesh time.
-- GitHub **does not guarantee** exact start time; delays of several minutes can happen when the platform is busy.
+- **Cron** is `*/2 * * * *`: roughly **every 2 minutes** in **UTC** (minutes `0, 2, 4, …` of each hour). GitHub **does not guarantee** exact timing; jobs can start **late** when the platform is busy.
+- This frequency uses **more Actions minutes** than an hourly job. For private repos or tight quotas, consider changing the cron in [`.github/workflows/shohoz-bus-monitor.yml`](.github/workflows/shohoz-bus-monitor.yml) (for example back to hourly `0 * * * *`).
+- Each successful run posts a **Discord summary** when **`DISCORD_NOTIFY_EVERY_CHECK`** is true (default in CI). Set repository **Variable** `DISCORD_NOTIFY_EVERY_CHECK` to **`false`** or **`0`** for **change-only** Discord. Legacy variable **`DISCORD_REPORT_EVERY_RUN`** is still read if the primary is unset.
+- If `OVERRIDE_DATE` is a **secret**, GitHub may redact that same text in logs (shown as `***`). Prefer an Actions **Variable** for dates if you need the value visible in logs.
 
 ### 6) Trigger a manual test run
 
@@ -201,15 +204,16 @@ Optional **variable** (not secret): **Settings → Secrets and variables → Act
 |------|--------|
 | Runner | `ubuntu-latest` |
 | Python | `3.11` (pinned in workflow) |
-| Schedule | `cron: "0 * * * *"` (UTC, hourly at minute 0) |
+| Schedule | `cron: "*/2 * * * *"` (UTC, about every 2 minutes) |
+| Per-run Discord | `DISCORD_NOTIFY_EVERY_CHECK` (default **true** via workflow bash when vars unset) |
 | Manual run | `workflow_dispatch` |
 | Secrets → env | `DISCORD_WEBHOOK`, optional `OVERRIDE_DATE` |
-| Optional variable | `NOTIFY_ON_BASELINE` |
+| Optional variables | `NOTIFY_ON_BASELINE`, `DISCORD_NOTIFY_EVERY_CHECK` (or legacy `DISCORD_REPORT_EVERY_RUN`) |
 | Artifacts | Full `monitor_run.log` uploaded **only if** the job fails |
 
 ### Troubleshooting common issues
 
-- **No Discord messages but the script “succeeds”**: this is normal in **change-only** mode. You only get Discord when the trip **count changes** vs `storage/state.json` for the same journey date key. The final log line explains which case happened.
+- **No Discord messages but the script “succeeds”**: with **`DISCORD_NOTIFY_EVERY_CHECK=false`**, Discord only fires on trip-count **changes** (plus optional baseline). With **every-check** mode (default), confirm **`DISCORD_WEBHOOK`** is set and the Discord step did not fail. Check the log line **“Discord mode: …”** at startup.
 - **First run for a route/date**: the monitor stores a **baseline** and (by default) does **not** ping Discord. Use **`NOTIFY_ON_BASELINE=1`** once if you want a first-hit confirmation, or **`DISCORD_TEST_MESSAGE=1`** once to prove the webhook URL reaches a channel.
 - **Wrong journey date key**: state is stored per `from|to|DD-MMM-YYYY`. If you change `OVERRIDE_DATE` (or the calendar day rolls over), you get a **new** key and a new baseline cycle.
 - **`Missing DISCORD_WEBHOOK`**: set it in `.env` (repo root) or GitHub Actions secrets.

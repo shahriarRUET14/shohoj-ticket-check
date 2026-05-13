@@ -3,19 +3,18 @@
 # Runs `main.py` on a schedule and on demand. Trip-count baselines live in
 # `storage/state.json` and are persisted across runs using `actions/cache` (best-effort).
 #
-# Cron (UTC): `0 * * * *` → at **minute 0** of every hour (e.g. 01:00 UTC, 02:00 UTC).
-# GitHub may start scheduled jobs a few minutes late under load; see README.
+# Cron (UTC): `*/5 * * * *` → about every **5 minutes** (GitHub may start late).
+# High-frequency schedules use more Actions minutes; see README.
 name: Shohoz Bus Trip Monitor
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "*/5 * * * *"
 
   workflow_dispatch:
 
 permissions:
   contents: read
-  # Required so `actions/cache` can save restored workflow caches on successful jobs.
   actions: write
 
 concurrency:
@@ -44,8 +43,6 @@ jobs:
       - name: Ensure storage directory exists
         run: mkdir -p storage
 
-      # Restore the last saved `storage/state.json` so trip counts can be compared run-to-run.
-      # Key includes run_id so each run writes a fresh cache entry; restore-keys pulls the latest prior.
       - name: Restore trip-count state (cache)
         uses: actions/cache@v4
         id: trip_state_cache
@@ -67,18 +64,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Never print the secret. Only confirm presence so beginners catch a missing secret early.
-      - name: Check DISCORD_WEBHOOK secret is configured (value hidden)
+      - name: Require DISCORD_WEBHOOK secret (value hidden)
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           set -euo pipefail
           if [ -z "${DISCORD_WEBHOOK:-}" ]; then
-            echo "::warning::DISCORD_WEBHOOK is not set. Shohoz checks will run, but Discord alerts on trip-count changes will fail until you add this repository secret."
-          else
-            echo "DISCORD_WEBHOOK secret is set (value not shown)."
+            echo "::error::Add repository secret DISCORD_WEBHOOK. Required for Discord (summary each run when DISCORD_NOTIFY_EVERY_CHECK is true)."
+            exit 1
           fi
+          echo "DISCORD_WEBHOOK is configured (value not shown)."
 
+      # Configure boolean without blank env overriding defaults:
+      # - Repository Variable DISCORD_NOTIFY_EVERY_CHECK: true/false/1/0 (preferred)
+      # - Or legacy Variable DISCORD_REPORT_EVERY_RUN if the primary is unset
       - name: Run monitor (main.py)
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -86,6 +85,15 @@ jobs:
           NOTIFY_ON_BASELINE: ${{ vars.NOTIFY_ON_BASELINE }}
         run: |
           set -euo pipefail
+          VM="${{ vars.DISCORD_NOTIFY_EVERY_CHECK }}"
+          VL="${{ vars.DISCORD_REPORT_EVERY_RUN }}"
+          if [ -n "${VM:-}" ]; then
+            export DISCORD_NOTIFY_EVERY_CHECK="$VM"
+          elif [ -n "${VL:-}" ]; then
+            export DISCORD_REPORT_EVERY_RUN="$VL"
+          else
+            export DISCORD_NOTIFY_EVERY_CHECK="true"
+          fi
           python main.py 2>&1 | tee monitor_run.log
 
       - name: Upload monitor log on failure

@@ -66,5 +66,11 @@ def journey_date_from_env_or_today() -> tuple[date, str]:
 
     parsed = parse_shohoz_date(raw)
     formatted = format_shohoz_date(parsed)
-    _LOG.info("Using OVERRIDE_DATE for journey: %s", formatted)
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        _LOG.info(
+            "Using OVERRIDE_DATE for journey (exact date omitted from Actions logs; "
+            "use a non-secret Actions Variable for OVERRIDE_DATE if you need it visible in logs)."
+        )
+    else:
+        _LOG.info("Using OVERRIDE_DATE for journey: %s", formatted)
     return parsed, formatted
