@@ -1,0 +1,82 @@
+# Shohoz Bus Trip Monitor
+#
+# This workflow runs the Python monitor on a schedule (hourly) and supports manual runs.
+# It restores/saves `storage/state.json` via GitHub Actions cache so trip-count baselines persist
+# across ephemeral runners (best-effort; caches may be evicted after periods of inactivity).
+name: Shohoz Bus Trip Monitor
+
+on:
+  # Hourly schedule (UTC). GitHub does not guarantee exact timing; see README for details.
+  schedule:
+    - cron: "0 * * * *"
+
+  # Allows you to run the monitor on demand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  # Minimal permissions: this workflow does not commit to the repository.
+  contents: read
+
+concurrency:
+  # Prevent overlapping scheduled/manual runs from clobbering each other.
+  group: shohoz-bus-monitor-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Ensures Python logs flush promptly in CI output.
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      # Cache strategy:
+      # - Each run writes a new cache entry keyed by `run_id` so the latest state always saves.
+      # - `restore-keys` pulls the most recent previously stored `storage/state.json`.
+      - name: Restore trip-count state (best-effort)
+        uses: actions/cache@v4
+        id: trip_state_cache
+        with:
+          path: storage/state.json
+          key: shohoz-state-${{ github.run_id }}
+          restore-keys: |
+            shohoz-state-
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run monitor (Shohoz + Discord)
+        env:
+          # Repository secret: Discord incoming webhook URL.
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          # Optional repository secret: forces journey date for all routes (DD-MMM-YYYY).
+          # If unset/empty, the monitor uses today's date in Shohoz format.
+          OVERRIDE_DATE: ${{ secrets.OVERRIDE_DATE }}
+          # Optional: set repository variable NOTIFY_ON_BASELINE to `1` if you want a Discord message
+          # the first time each route+journey date is stored on a fresh runner/cache.
+          NOTIFY_ON_BASELINE: ${{ vars.NOTIFY_ON_BASELINE }}
+          set -euo pipefail
+          python main.py 2>&1 | tee monitor_run.log
+
+      - name: Upload run log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shohoz-monitor-run-log
+          if-no-files-found: warn
+          path: monitor_run.log

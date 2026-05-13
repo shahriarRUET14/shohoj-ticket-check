@@ -1,0 +1,3 @@
+# Production dependencies — pinned loosely for security patches while staying stable.
+requests>=2.31.0,<3
+python-dotenv>=1.0.0,<2

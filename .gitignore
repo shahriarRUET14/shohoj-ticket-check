@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Local environment files (never commit secrets)
+.env
+
+# Runtime state produced by the monitor (regenerated each run)
+storage/state.json
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
