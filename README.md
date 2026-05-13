@@ -45,7 +45,7 @@ It is designed to run locally or on **GitHub Actions** using a **free** hosted r
 - **`src/date_utils.py`**: formats dates as **`DD-MMM-YYYY`** and validates `OVERRIDE_DATE`.
 - **`src/storage.py`**: reads/writes `storage/state.json` with a small versioned schema.
 - **`src/discord_notifier.py`**: formats **embeds** (route, counts, journey date, timestamp, status icon).
-- **`.github/workflows/shohoz-bus-monitor.yml`**: installs dependencies, restores/saves cached state, runs `main.py`, uploads logs on failure.
+- **`.github/workflows/shohoz-bus-monitor.yml`**: Ubuntu + Python 3.11, pip install, optional secret check, `main.py`, cache for `storage/state.json`, log artifact on failure.
 
 ## Prerequisites
 
@@ -112,26 +112,24 @@ Notes:
 - **Query params**: `from_city`, `to_city`, `date_of_journey` (**`DD-MMM-YYYY`**), `dor=` (empty)
 - **Headers**: see `src/constants.py` (`Referer`, `X-Requested-With`, `User-Agent`, JSON accept/content types)
 
-## GitHub Actions deployment (free tier)
+## Deploy with GitHub Actions (beginner checklist)
 
-This workflow runs hourly and supports manual runs.
+The workflow file is [`.github/workflows/shohoz-bus-monitor.yml`](.github/workflows/shohoz-bus-monitor.yml). It uses **Ubuntu latest**, **Python 3.11**, installs from **`requirements.txt`**, and runs **`main.py`**. Secrets are injected only as environment variables for that job step (they are **not** printed in logs by our scripts).
 
-### 1) Create a Discord webhook
+### Prerequisite: Discord webhook
 
-1. Open your Discord server → select a channel.
-2. **Edit Channel** → **Integrations** → **Webhooks** → **New Webhook**.
-3. Copy the **Webhook URL** (starts with `https://discord.com/api/webhooks/...`).
-4. Treat it like a password: anyone with the URL can post to your channel.
+1. In Discord: open your server → pick a channel → **Edit Channel** → **Integrations** → **Webhooks** → **New Webhook**.
+2. Copy the **Webhook URL** (`https://discord.com/api/webhooks/...`). Anyone with the URL can post to that channel—store it only in **GitHub Secrets** (or local `.env`, never commit it).
 
-### 2) Create a GitHub repository
+### 1) Create a GitHub repository
 
-1. On GitHub: **New repository**.
-2. Choose a name (example: `shohoj-check-tickets`), set visibility, **do not** add a conflicting README if you already have one locally.
-3. Create the repository.
+1. On [GitHub](https://github.com), click **+** → **New repository**.
+2. Choose a name (for example `shohoj-check-tickets`), visibility, and create it.
+3. If you already have this project on your computer, **do not** add a license/README on GitHub that would conflict with your first push (or pull their README first and merge).
 
-### 3) Push code using git (first push)
+### 2) Push your project with git
 
-From your machine (replace the URL with your repo):
+From your project folder (replace the remote URL with yours):
 
 ```bash
 git init
@@ -142,48 +140,72 @@ git remote add origin https://github.com/<your-username>/<your-repo>.git
 git push -u origin main
 ```
 
-### 4) Add GitHub secrets
+If the remote already exists, use `git remote set-url origin ...` instead of `git remote add`.
 
-In GitHub: **Settings → Secrets and variables → Actions → New repository secret**
+### 3) Enable GitHub Actions
 
-- **Secret**: `DISCORD_WEBHOOK` → paste the Discord webhook URL.
-- **Secret (optional)**: `OVERRIDE_DATE` → set to a Shohoz date like `30-May-2026` (same format as production).
+1. Open the repo on GitHub → **Actions**.
+2. If GitHub asks to enable workflows for this repository, approve it.
+3. You should see the workflow **“Shohoz Bus Trip Monitor”** listed under “All workflows”.
 
-The workflow maps them here:
+### 4) Add repository secrets (secure)
 
-- `DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}`
-- `OVERRIDE_DATE: ${{ secrets.OVERRIDE_DATE }}`
+1. Repo **Settings** → **Secrets and variables** → **Actions**.
+2. **New repository secret** → name **`DISCORD_WEBHOOK`** → paste the full webhook URL → **Add secret**.
+3. Optional: **New repository secret** → **`OVERRIDE_DATE`** → value like `30-May-2026` (Shohoz `DD-MMM-YYYY` format).
 
-### 5) Enable GitHub Actions
+Secrets are **write-only** in the UI; you cannot read them back later. To rotate: edit by adding a new secret value (replace workflow reference if you rename keys).
 
-1. Go to the **Actions** tab in your repository.
-2. If prompted, enable workflows for the repo.
-3. Confirm `.github/workflows/shohoz-bus-monitor.yml` appears and runs (use **Run workflow** to test).
+Optional **variable** (not secret): **Settings → Secrets and variables → Actions → Variables** → **`NOTIFY_ON_BASELINE`** = `1` if you want a Discord message the first time each route+date is stored on a fresh cache (see [Environment variables](#environment-variables)).
 
-### How the hourly cron works (and caveats)
+### 5) Confirm the workflow and schedule
 
-- The workflow uses `cron: "0 * * * *"` which means **minute 0 of every hour**, in the workflow’s default timezone (**UTC** on GitHub-hosted runners).
-- GitHub’s documentation notes scheduled workflows **may be delayed** during periods of high load; do not assume minute-perfect scheduling.
+- **Cron** is `0 * * * *`: at **minute 0** of every clock hour in **UTC** (so “1:00, 2:00, 3:00” in the **UTC** sense: `01:00`, `02:00`, `03:00` UTC).
+- To run in **your** local timezone at those wall-clock times, either accept UTC scheduling or add a separate workflow/cron offset (advanced). Most users standardize on **UTC** and compare with [timeanddate.com](https://www.timeanddate.com/worldclock/) for Bangladesh time.
+- GitHub **does not guarantee** exact start time; delays of several minutes can happen when the platform is busy.
 
-### GitHub free-tier limitations (practical)
+### 6) Trigger a manual test run
 
-- **Private repos**: GitHub Free accounts historically had limits on Actions minutes for private repositories; check GitHub’s current billing/docs for your account type.
-- **Cache eviction**: this repo persists `storage/state.json` via `actions/cache`. Caches can be **evicted** after periods of inactivity; if evicted, the next run re-baselines counts (you may not get a “change” alert until a subsequent change after re-baseline).
-- **Concurrency**: heavy use across many repos can queue runs.
+1. **Actions** → **Shohoz Bus Trip Monitor**.
+2. **Run workflow** → branch **main** → **Run workflow**.
+3. Wait for the green checkmark or open the run if it fails.
 
-### Debug workflow failures
+### 7) View logs for a run
 
-1. Open **Actions** → select the failed run.
-2. Expand **Run monitor (Shohoz + Discord)** logs.
-3. If the job failed, download the uploaded artifact **`shohoz-monitor-run-log`** (when present).
-4. Common failures:
-   - Missing/invalid `DISCORD_WEBHOOK` secret when a change needs to be posted
-   - Shohoz API blocked or temporarily failing (retries help, but not infinite)
-   - Invalid `OVERRIDE_DATE` format
+1. **Actions** → click the workflow run row.
+2. Open the **monitor** job.
+3. Expand each step; **`Run monitor (main.py)`** shows everything `main.py` printed (Shohoz counts, Discord summary lines).
 
-### Manually trigger the workflow
+### 8) Debug a failed run
 
-**Actions → Shohoz Bus Trip Monitor → Run workflow → Run workflow**
+1. Read the red **failed** step in the job log (often **Install dependencies** or **Run monitor**).
+2. If the failure happened during **`Run monitor`**, download the artifact **`shohoz-monitor-log-<run id>`** (uploaded only on failure) for the full `tee` log file.
+3. Typical issues: missing **`DISCORD_WEBHOOK`** when a trip-count **change** must be posted; invalid **`OVERRIDE_DATE`**; Shohoz API errors (see log lines from `src.shohoz_client`).
+4. Locally reproduce with the same env: copy secrets into a local `.env` (never commit) and run `python main.py`, or use **`DISCORD_TEST_MESSAGE=1`** once in `.env` to validate the webhook (see [Environment variables](#environment-variables)).
+
+### 9) Verify scheduled (cron) execution
+
+1. After the first scheduled hour, open **Actions** and filter by **“Scheduled”** (or inspect each run’s title / event badge).
+2. If you see no scheduled runs: default branch must be the branch in `on:` (usually **main**), Actions must be enabled, and the workflow file must be on that branch. Very new repos sometimes see the first schedule after a short delay.
+
+### GitHub Actions free tier (practical limits)
+
+- **Public repositories**: Actions minutes for standard hosted jobs are typically generous for a small hourly job; still read [GitHub’s billing docs](https://docs.github.com/en/billing) for your account.
+- **Private repositories**: free/private minute allowances have changed over time—confirm your plan.
+- **Concurrency / queueing**: many workflows in one org can queue; your job has a **15 minute** timeout.
+- **Cache**: `storage/state.json` is stored in **Actions cache**, which can be **evicted** after inactivity; the next run then **re-baselines** counts (fewer “change” alerts until the API count moves again).
+
+### Workflow reference (quick map)
+
+| Item | Value |
+|------|--------|
+| Runner | `ubuntu-latest` |
+| Python | `3.11` (pinned in workflow) |
+| Schedule | `cron: "0 * * * *"` (UTC, hourly at minute 0) |
+| Manual run | `workflow_dispatch` |
+| Secrets → env | `DISCORD_WEBHOOK`, optional `OVERRIDE_DATE` |
+| Optional variable | `NOTIFY_ON_BASELINE` |
+| Artifacts | Full `monitor_run.log` uploaded **only if** the job fails |
 
 ### Troubleshooting common issues
 
@@ -210,19 +232,19 @@ This prevents comparing **today’s** trip list length against **yesterday’s**
 
 ## Reference checklist (topics 1–13)
 
-1. **Project structure**: see the tree in [Project structure](#project-structure) above.
-2. **Run locally**: see [Run locally](#run-locally).
-3. **Install dependencies**: see [Install dependencies (local)](#install-dependencies-local).
-4. **Create a Discord webhook**: see [Create a Discord webhook](#1-create-a-discord-webhook).
-5. **Create a GitHub repository**: see [Create a GitHub repository](#2-create-a-github-repository).
-6. **Push code using git**: see [Push code using git (first push)](#3-push-code-using-git-first-push).
-7. **Add GitHub secrets**: see [Add GitHub secrets](#4-add-github-secrets).
-8. **Enable GitHub Actions**: see [Enable GitHub Actions](#5-enable-github-actions).
-9. **How Actions cron works**: see [How the hourly cron works (and caveats)](#how-the-hourly-cron-works-and-caveats).
-10. **Free-tier limitations**: see [GitHub free-tier limitations (practical)](#github-free-tier-limitations-practical).
-11. **Debug workflow failures**: see [Debug workflow failures](#debug-workflow-failures).
-12. **Manual workflow trigger**: see [Manually trigger the workflow](#manually-trigger-the-workflow).
-13. **Troubleshooting common issues**: see [Troubleshooting common issues](#troubleshooting-common-issues).
+1. **Project structure**: [Project structure](#project-structure)
+2. **Run locally**: [Run locally](#run-locally)
+3. **Install dependencies**: [Install dependencies (local)](#install-dependencies-local)
+4. **Discord webhook**: [Prerequisite: Discord webhook](#prerequisite-discord-webhook)
+5. **Create GitHub repo**: [1) Create a GitHub repository](#1-create-a-github-repository)
+6. **Push with git**: [2) Push your project with git](#2-push-your-project-with-git)
+7. **Enable Actions**: [3) Enable GitHub Actions](#3-enable-github-actions)
+8. **Add secrets**: [4) Add repository secrets (secure)](#4-add-repository-secrets-secure)
+9. **Cron / schedule**: [5) Confirm the workflow and schedule](#5-confirm-the-workflow-and-schedule)
+10. **Free tier**: [GitHub Actions free tier (practical limits)](#github-actions-free-tier-practical-limits)
+11. **Debug failures**: [8) Debug a failed run](#8-debug-a-failed-run)
+12. **Manual run**: [6) Trigger a manual test run](#6-trigger-a-manual-test-run)
+13. **Troubleshooting**: [Troubleshooting common issues](#troubleshooting-common-issues)
 
 ## License
 

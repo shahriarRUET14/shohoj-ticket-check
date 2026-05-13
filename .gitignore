@@ -14,6 +14,10 @@ ENV/
 # Runtime state produced by the monitor (regenerated each run)
 storage/state.json
 
+# Local / CI tee output (optional)
+monitor_run.log
+*.log
+
 # Editors / OS
 .idea/
 .vscode/
